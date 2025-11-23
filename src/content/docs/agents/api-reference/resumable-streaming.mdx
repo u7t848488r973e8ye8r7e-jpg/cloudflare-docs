@@ -79,14 +79,14 @@ async generateAIResponse(options: GenerateAIResponseOptions): Promise<string> {
 
 </TypeScriptExample>
 
-### \_rsm_generateResponse()
+### \_handleStreamGeneration()
 
 This is a queue callback that delegates to the manager. It processes AI generation in the background:
 
 <TypeScriptExample>
 
 ```ts
-async _rsm_generateResponse(
+async _handleStreamGeneration(
   payload: { userMessageId: string; streamId: string },
   _queueItem?: QueueItem
 ) {
@@ -198,7 +198,7 @@ export interface ResumableStreamAgent<
   State extends ResumableStreamState = ResumableStreamState
 > extends Agent<Env, State> {
   generateAIResponse(options: GenerateAIResponseOptions): Promise<string>;
-  _rsm_generateResponse(
+  _handleStreamGeneration(
     payload: { userMessageId: string; streamId: string },
     queueItem?: QueueItem
   ): Promise<void>;
@@ -350,7 +350,7 @@ await this.streams.cleanupOldStreams(24 * 60 * 60 * 1000); // 1 day
 
 1. User sends a message via `sendMessage()`
 2. Message is saved to SQLite and state is updated (5-10ms)
-3. `_rsm_generateResponse` is queued for background processing
+3. `_handleStreamGeneration` is queued for background processing
 4. AI generation happens asynchronously
 5. Each chunk is saved and broadcast in real-time
 6. Complete message is saved when the stream finishes
@@ -445,7 +445,7 @@ export class ResumableStreamingChat extends Agent<Env, ChatState> {
     return fullContent;
   }
 
-  async _rsm_generateResponse(
+  async _handleStreamGeneration(
     payload: { userMessageId: string; streamId: string },
     _queueItem?: QueueItem
   ) {
