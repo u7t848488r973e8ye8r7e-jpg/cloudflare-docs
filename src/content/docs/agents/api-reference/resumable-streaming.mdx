@@ -7,21 +7,23 @@ sidebar:
 
 import { TypeScriptExample } from "~/components";
 
-The Agents SDK provides a `ResumableStreamManager` for implementing AI streaming that automatically resumes after disconnections or page refreshes and supports streaming to multiple clients simultaneously.
+The Agents SDK provides a `ResumableStreamManager` for implementing AI streaming that automatically resumes after disconnections or page refreshes, and supports streaming to multiple clients simultaneously.
 
 ## Overview
 
-The `ResumableStreamManager` handles:
+The `ResumableStreamManager` handles the complexity of reliable streaming in production environments:
 
-- Chunk persistence in SQLite for replay
-- Stream metadata tracking (streaming, completed, error states)
-- Complete message history with timestamps
-- Automatic detection and replay of active streams
-- Multi-client support with real-time updates
+* Chunk persistence in SQLite for replay after disconnections
+* Stream metadata tracking (streaming, completed, error states)
+* Complete message history with timestamps
+* Automatic detection and replay of active streams
+* Multi-client support with real-time updates via WebSockets
+
+This allows you to build AI streaming applications that work reliably even when users refresh their browser, switch tabs, or experience network interruptions.
 
 ## Setup
 
-Instantiate the manager in your agent class:
+Instantiate the manager in your Agent class by passing the Agent instance and context:
 
 <TypeScriptExample>
 
@@ -40,29 +42,46 @@ export class ChatAgent extends Agent<Env, State> {
 
 ## Required implementation
 
-Your agent must implement two methods to work with the `ResumableStreamManager`:
+Your Agent must implement two methods to work with the `ResumableStreamManager`:
 
 ### generateAIResponse()
 
 This method receives options from the manager and must:
 
-1. Generate AI response using any AI SDK
+1. Generate an AI response using any AI SDK
 2. Call `processChunk()` for each chunk (handles saving and broadcasting)
-3. Return complete content
+3. Return the complete content
 
 <TypeScriptExample>
 
 ```ts
 async generateAIResponse(options: GenerateAIResponseOptions): Promise<string> {
-  // Implementation required
+  const messages = options.messages.map((msg) => ({
+    role: msg.role,
+    content: msg.content
+  }));
+
+  const result = streamText({
+    model: openai("gpt-4o"),
+    messages
+  });
+
+  let fullContent = "";
+  // Stream and broadcast each chunk
+  for await (const chunk of result.textStream) {
+    fullContent += chunk;
+    await options.processChunk(chunk);
+  }
+
+  return fullContent;
 }
 ```
 
 </TypeScriptExample>
 
-### _rsm_generateResponse()
+### \_rsm_generateResponse()
 
-Queue callback that delegates to the manager:
+This is a queue callback that delegates to the manager. It processes AI generation in the background:
 
 <TypeScriptExample>
 
@@ -81,6 +100,8 @@ async _rsm_generateResponse(
 
 ### ResumableMessage
 
+Represents a message in the conversation history:
+
 <TypeScriptExample>
 
 ```ts
@@ -95,6 +116,8 @@ export type ResumableMessage = {
 </TypeScriptExample>
 
 ### ResumableStreamChunk
+
+Represents an individual chunk of a streaming response:
 
 <TypeScriptExample>
 
@@ -111,6 +134,8 @@ export type ResumableStreamChunk = {
 </TypeScriptExample>
 
 ### ResumableStreamMetadata
+
+Contains metadata about a stream's status and progress:
 
 <TypeScriptExample>
 
@@ -130,6 +155,8 @@ export type ResumableStreamMetadata = {
 
 ### GenerateAIResponseOptions
 
+Options passed to the `generateAIResponse()` method:
+
 <TypeScriptExample>
 
 ```ts
@@ -145,6 +172,8 @@ export type GenerateAIResponseOptions = {
 
 ### ResumableStreamState
 
+The state interface your Agent should extend to use resumable streaming:
+
 <TypeScriptExample>
 
 ```ts
@@ -158,6 +187,8 @@ export interface ResumableStreamState {
 </TypeScriptExample>
 
 ### ResumableStreamAgent
+
+The interface defining the contract for Agents using resumable streaming:
 
 <TypeScriptExample>
 
@@ -180,23 +211,7 @@ export interface ResumableStreamAgent<
 
 ### initializeTables()
 
-Creates SQLite tables for message and stream persistence.
-
-<TypeScriptExample>
-
-```ts
-async initializeTables(): Promise<void>
-```
-
-</TypeScriptExample>
-
-**Tables created:**
-
-- `messages` - conversation history
-- `stream_chunks` - individual chunks for each stream
-- `stream_metadata` - stream status and metadata
-
-**Example:**
+Creates SQLite tables for message and stream persistence. Call this during your Agent's `onStart()` method:
 
 <TypeScriptExample>
 
@@ -209,25 +224,15 @@ async onStart() {
 
 </TypeScriptExample>
 
+**Tables created:**
+
+* `messages` - conversation history
+* `stream_chunks` - individual chunks for each stream
+* `stream_metadata` - stream status and metadata
+
 ### sendMessage()
 
-Saves a user message and queues AI response generation.
-
-<TypeScriptExample>
-
-```ts
-async sendMessage(content: string): Promise<{ messageId: string; streamId: string }>
-```
-
-</TypeScriptExample>
-
-**Parameters:**
-
-- `content` - the user's message text
-
-**Returns:** Message ID and stream ID
-
-**Example:**
+Saves a user message and queues AI response generation. This method returns immediately while AI generation happens in the background via the queue system:
 
 <TypeScriptExample>
 
@@ -237,23 +242,15 @@ const { messageId, streamId } = await this.streams.sendMessage("Hello!");
 
 </TypeScriptExample>
 
-The method returns immediately. AI generation happens in the background via the queue system.
+**Parameters:**
+
+* `content` - the user's message text
+
+**Returns:** Object containing `messageId` and `streamId`
 
 ### loadMessages()
 
-Loads all messages from storage.
-
-<TypeScriptExample>
-
-```ts
-async loadMessages(): Promise<ResumableMessage[]>
-```
-
-</TypeScriptExample>
-
-**Returns:** Array of messages ordered by creation time
-
-**Example:**
+Loads all messages from storage, ordered by creation time:
 
 <TypeScriptExample>
 
@@ -266,19 +263,7 @@ console.log(`Loaded ${messages.length} messages`);
 
 ### loadAndSyncMessages()
 
-Loads messages from storage and syncs them to agent state.
-
-<TypeScriptExample>
-
-```ts
-async loadAndSyncMessages(): Promise<void>
-```
-
-</TypeScriptExample>
-
-Call this during `onStart()` to restore conversation history.
-
-**Example:**
+Loads messages from storage and syncs them to Agent state. Call this during `onStart()` to restore conversation history:
 
 <TypeScriptExample>
 
@@ -294,26 +279,7 @@ async onStart() {
 
 ### getStreamHistory()
 
-Retrieves stream chunks and metadata for resuming.
-
-<TypeScriptExample>
-
-```ts
-async getStreamHistory(streamId: string): Promise<{
-  chunks: ResumableStreamChunk[];
-  metadata: ResumableStreamMetadata | null;
-}>
-```
-
-</TypeScriptExample>
-
-**Parameters:**
-
-- `streamId` - ID of the stream to retrieve
-
-**Returns:** Chunks array and metadata object (or null)
-
-**Example:**
+Retrieves stream chunks and metadata for resuming after a disconnection:
 
 <TypeScriptExample>
 
@@ -331,25 +297,15 @@ if (metadata?.status === "streaming") {
 
 </TypeScriptExample>
 
+**Parameters:**
+
+* `streamId` - ID of the stream to retrieve
+
+**Returns:** Object containing `chunks` array and `metadata` object (or null)
+
 ### clearHistory()
 
-Removes all messages, chunks, and metadata from storage.
-
-<TypeScriptExample>
-
-```ts
-async clearHistory(): Promise<void>
-```
-
-</TypeScriptExample>
-
-:::note
-
-This only clears storage. You must also reset agent state.
-
-:::
-
-**Example:**
+Removes all messages, chunks, and metadata from storage:
 
 <TypeScriptExample>
 
@@ -360,70 +316,69 @@ this.setState(this.initialState);
 
 </TypeScriptExample>
 
+:::note
+
+This only clears storage. You must also reset Agent state separately.
+
+:::
+
 ### cleanupOldStreams()
 
-Clean up old completed stream chunks to prevent storage growth.
-
-<TypeScriptExample>
-
-```ts
-async cleanupOldStreams(olderThanMs: number = 604800000): Promise<number>
-```
-
-</TypeScriptExample>
-
-**Parameters:**
-
-- `olderThanMs` - Remove chunks from streams completed longer than this (in milliseconds). Defaults to 7 days.
-
-**Returns:** Number of streams cleaned up
-
-**Example:**
+Clean up old completed stream chunks to prevent storage growth. Defaults to removing streams older than 7 days:
 
 <TypeScriptExample>
 
 ```ts
 // Clean up streams older than 7 days
 await this.streams.cleanupOldStreams();
+
+// Or specify a custom retention period (in milliseconds)
+await this.streams.cleanupOldStreams(24 * 60 * 60 * 1000); // 1 day
 ```
 
 </TypeScriptExample>
+
+**Parameters:**
+
+* `olderThanMs` - Remove chunks from streams completed longer than this (in milliseconds). Defaults to 7 days (604800000ms).
+
+**Returns:** Number of streams cleaned up
 
 ## How it works
 
 ### Message flow
 
-1. User sends message via `sendMessage()`
-2. Message saved to SQLite and state updated (5-10ms)
-3. `_rsm_generateResponse` queued for background processing
+1. User sends a message via `sendMessage()`
+2. Message is saved to SQLite and state is updated (5-10ms)
+3. `_rsm_generateResponse` is queued for background processing
 4. AI generation happens asynchronously
-5. Each chunk saved and broadcast in real-time
-6. Complete message saved when stream finishes
+5. Each chunk is saved and broadcast in real-time
+6. Complete message is saved when the stream finishes
 
 ### Resume flow
 
 **On reconnect:**
 
 1. Client receives state update with `activeStreamId`
-2. Calls `getStreamHistory()` to fetch chunks
-3. Reconstructs streaming message from chunks
+2. Client calls `getStreamHistory()` to fetch chunks
+3. Client reconstructs streaming message from chunks
 
 **Multi-tab support:**
 
-- All tabs receive real-time chunks via WebSocket
-- New tabs detect active stream from state
-- Deduplication prevents double-replay
+* All tabs receive real-time chunks via WebSocket
+* New tabs detect active stream from state
+* Deduplication prevents double-replay
 
 ### Storage architecture
 
 The manager uses a dual-layer storage pattern:
 
-- **SQLite tables** - for queries, pagination, search
-- **Agent state** - for automatic client synchronization
+* **SQLite tables** - for queries, pagination, and search
+* **Agent state** - for automatic client synchronization via WebSockets
 
 ## Complete example
 
-The following example demonstrates a complete implementation of a resumable streaming chat agent using the Agents SDK with OpenAI:
+The following example demonstrates a complete implementation of a resumable streaming chat Agent:
 
 <TypeScriptExample>
 
@@ -431,7 +386,6 @@ The following example demonstrates a complete implementation of a resumable stre
 import { openai } from "@ai-sdk/openai";
 import {
   Agent,
-  type AgentNamespace,
   callable,
   ResumableStreamManager,
   type GenerateAIResponseOptions,
@@ -442,20 +396,16 @@ import { streamText } from "ai";
 
 type Env = {
   OPENAI_API_KEY: string;
-  ResumableStreamingChat: AgentNamespace<ResumableStreamingChat>;
 };
 
-export interface ResumableStreamingChatState extends ResumableStreamState {
+export interface ChatState extends ResumableStreamState {
   // Inherits: messages, activeStreamId
 }
 
-export class ResumableStreamingChat extends Agent<
-  Env,
-  ResumableStreamingChatState
-> {
+export class ResumableStreamingChat extends Agent<Env, ChatState> {
   private streams = new ResumableStreamManager(this, this.ctx);
 
-  initialState: ResumableStreamingChatState = {
+  initialState: ChatState = {
     messages: [],
     activeStreamId: null
   };
@@ -487,7 +437,6 @@ export class ResumableStreamingChat extends Agent<
     });
 
     let fullContent = "";
-    // Stream and broadcast each chunk
     for await (const chunk of result.textStream) {
       fullContent += chunk;
       await options.processChunk(chunk);
@@ -518,4 +467,10 @@ export class ResumableStreamingChat extends Agent<
 
 </TypeScriptExample>
 
-Refer to the [resumable-stream-chat example](https://github.com/cloudflare/agents/tree/main/examples/resumable-stream-chat) for a complete implementation including React client and configuration.
+For a complete working example including the React client implementation and deployment configuration, refer to the [resumable-stream-chat example](https://github.com/cloudflare/agents/tree/main/examples/resumable-stream-chat) in the Agents SDK repository.
+
+## Next steps
+
+* Learn more about [using WebSockets](/agents/api-reference/websockets/) to build interactive Agents
+* Review the [state management API](/agents/api-reference/store-and-sync-state/) for managing Agent state
+* Explore [using AI models](/agents/api-reference/using-ai-models/) in your Agents
