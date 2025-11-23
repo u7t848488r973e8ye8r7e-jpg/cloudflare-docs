@@ -201,7 +201,7 @@ export class MyAgent extends Agent<Env, never> {
 				([id, server]) => ({
 					serverId: id,
 					name: server.name,
-					state: server.state, // "authenticating" | "connecting" | "ready" | "failed"
+					state: server.state, // "authenticating" | "connecting" | "connected" | "discovering" | "ready" | "failed"
 					isReady: server.state === "ready",
 					needsAuth: server.state === "authenticating",
 					authUrl: server.auth_url,
@@ -220,7 +220,7 @@ export class MyAgent extends Agent<Env, never> {
 
 </TypeScriptExample>
 
-Connection states: `authenticating` (needs OAuth) > `connecting` (completing setup) > `ready` (available for use)
+Connection states: `authenticating` (needs OAuth) > `connecting` (establishing transport) > `connected` (transport established) > `discovering` (loading capabilities) > `ready` (available for use)
 
 ## Handle authentication failures
 
@@ -295,6 +295,59 @@ Common failure reasons:
 - **Expired session**: OAuth session timed out
 
 Failed connections remain in state until you remove them with `removeMcpServer(serverId)`.
+
+## Use connection state constants
+
+For better type safety, use the `MCPConnectionState` enum constants instead of string literals when checking connection states:
+
+<TypeScriptExample>
+
+```tsx title="src/App.tsx"
+import { useAgent, MCPConnectionState } from "agents/react";
+import type { MCPServersState } from "agents";
+
+function App() {
+	const [mcpState, setMcpState] = useState<MCPServersState>({
+		prompts: [],
+		resources: [],
+		servers: {},
+		tools: [],
+	});
+
+	const agent = useAgent({
+		agent: "my-agent",
+		name: "session-id",
+		onMcpUpdate: (mcpServers: MCPServersState) => {
+			setMcpState(mcpServers);
+		},
+	});
+
+	return (
+		<div>
+			{Object.entries(mcpState.servers).map(([id, server]) => (
+				<div key={id}>
+					<strong>{server.name}</strong>: {server.state}
+					{server.state === MCPConnectionState.AUTHENTICATING && server.auth_url && (
+						<button onClick={() => window.open(server.auth_url, "_blank")}>
+							Authorize
+						</button>
+					)}
+					{server.state === MCPConnectionState.FAILED && (
+						<button onClick={() => handleRetry(id)}>Retry</button>
+					)}
+					{server.state === MCPConnectionState.READY && (
+						<span>✓ Ready</span>
+					)}
+				</div>
+			))}
+		</div>
+	);
+}
+```
+
+</TypeScriptExample>
+
+Using constants prevents typos and provides better IDE autocomplete. See the [Connection State Constants](/agents/model-context-protocol/mcp-client-api/#connection-state-constants) section for the full list.
 
 ## Complete example
 

@@ -193,8 +193,9 @@ An `MCPServersState` object containing:
 			state:
 				| "authenticating"
 				| "connecting"
-				| "ready"
+				| "connected"
 				| "discovering"
+				| "ready"
 				| "failed";
 			capabilities: ServerCapabilities | null;
 			instructions: string | null;
@@ -228,7 +229,55 @@ export class MyAgent extends Agent<Env, never> {
 
 </TypeScriptExample>
 
-The `state` field can be: `authenticating`, `connecting`, `ready`, `discovering`, or `failed`. Use this method to monitor connection status, list available tools, or build UI for connected servers.
+The `state` field indicates the current connection state:
+
+- `authenticating` — Waiting for OAuth authorization to complete
+- `connecting` — Establishing transport connection to MCP server
+- `connected` — Transport connection established successfully
+- `discovering` — Discovering server capabilities (tools, resources, prompts)
+- `ready` — Fully connected and ready to use
+- `failed` — Connection failed at some point
+
+Use this method to monitor connection status, list available tools, or build UI for connected servers.
+
+## Connection State Constants
+
+The `MCPConnectionState` object provides enum-like constants for working with connection states:
+
+<TypeScriptExample>
+
+```ts title="src/index.ts"
+import { Agent, MCPConnectionState } from "agents";
+
+export class MyAgent extends Agent<Env, never> {
+	async onRequest(request: Request): Promise<Response> {
+		const mcpState = this.getMcpServers();
+
+		for (const [serverId, server] of Object.entries(mcpState.servers)) {
+			if (server.state === MCPConnectionState.READY) {
+				console.log(`Server ${serverId} is ready`);
+			} else if (server.state === MCPConnectionState.AUTHENTICATING) {
+				console.log(`Server ${serverId} needs authentication`);
+			}
+		}
+
+		return new Response("OK");
+	}
+}
+```
+
+</TypeScriptExample>
+
+Available constants:
+
+- `MCPConnectionState.AUTHENTICATING` — `"authenticating"`
+- `MCPConnectionState.CONNECTING` — `"connecting"`
+- `MCPConnectionState.CONNECTED` — `"connected"`
+- `MCPConnectionState.DISCOVERING` — `"discovering"`
+- `MCPConnectionState.READY` — `"ready"`
+- `MCPConnectionState.FAILED` — `"failed"`
+
+Using these constants instead of string literals provides better type safety and prevents typos.
 
 ## OAuth Configuration
 
